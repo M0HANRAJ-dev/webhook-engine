@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Webhook Delivery Engine</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3250;
+      --accent: #6c63ff;
+      --accent-hover: #8b85ff;
+      --text: #e2e8f0;
+      --muted: #8892a4;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --info: #3b82f6;
+      --radius: 10px;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Layout ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    header h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: .5px; }
+    header h1 span { color: var(--accent); }
+
+    .badge-live {
+      display: flex; align-items: center; gap: 6px;
+      font-size: .75rem; color: var(--success);
+    }
+    .badge-live::before {
+      content: '';
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .3; }
+    }
+
+    main { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+
+    /* ── Stats bar ── */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .stat-card .label { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
+    .stat-card .value { font-size: 2rem; font-weight: 700; }
+    .stat-card.pending .value { color: var(--info); }
+    .stat-card.delivered .value { color: var(--success); }
+    .stat-card.failed .value { color: var(--warning); }
+    .stat-card.dead .value { color: var(--danger); }
+
+    /* ── Panels ── */
+    .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    @media (max-width: 768px) { .panels { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; } }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      font-size: .9rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* ── Form ── */
+    .form-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    label { font-size: .8rem; color: var(--muted); display: block; margin-bottom: 4px; }
+    input, textarea, select {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 9px 12px;
+      font-size: .875rem;
+      outline: none;
+      transition: border-color .2s;
+    }
+    input:focus, textarea:focus { border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 80px; font-family: monospace; }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: .875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s, opacity .2s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-sm { padding: 5px 12px; font-size: .75rem; }
+    .btn-retry { background: var(--warning); color: #000; }
+    .btn-retry:hover { opacity: .85; }
+
+    /* ── Event list ── */
+    .event-list { max-height: 480px; overflow-y: auto; }
+    .event-item {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .15s;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .event-item:last-child { border-bottom: none; }
+    .event-item:hover { background: var(--surface2); }
+    .event-item.active { background: var(--surface2); border-left: 3px solid var(--accent); }
+
+    .event-type { font-size: .85rem; font-weight: 600; flex: 1; min-width: 0; }
+    .event-type small { display: block; color: var(--muted); font-size: .7rem; font-weight: 400; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── Status badge ── */
+    .status {
+      font-size: .7rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      white-space: nowrap;
+    }
+    .status-pending  { background: rgba(59,130,246,.15); color: var(--info); }
+    .status-delivered{ background: rgba(34,197,94,.15);  color: var(--success); }
+    .status-failed   { background: rgba(245,158,11,.15); color: var(--warning); }
+    .status-dead     { background: rgba(239,68,68,.15);  color: var(--danger); }
+
+    /* ── Detail panel ── */
+    .detail-body { padding: 20px; }
+    .detail-empty { color: var(--muted); font-size: .875rem; text-align: center; padding: 40px 0; }
+
+    .detail-meta { margin-bottom: 16px; }
+    .detail-meta .row { display: flex; gap: 8px; margin-bottom: 6px; font-size: .8rem; }
+    .detail-meta .key { color: var(--muted); min-width: 100px; }
+    .detail-meta .val { color: var(--text); word-break: break-all; }
+
+    .payload-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: .78rem;
+      color: #a5f3fc;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 120px;
+      overflow-y: auto;
+      margin-bottom: 16px;
+    }
+
+    .attempts-title { font-size: .8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 10px; }
+    .attempt-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: var(--surface2);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: .78rem;
+    }
+    .attempt-num { color: var(--muted); min-width: 24px; }
+    .attempt-time { color: var(--muted); flex: 1; }
+    .attempt-http { font-family: monospace; min-width: 36px; }
+    .http-ok { color: var(--success); }
+    .http-err { color: var(--danger); }
+    .http-null { color: var(--muted); }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 24px; right: 24px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 18px;
+      font-size: .85rem;
+      max-width: 320px;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity .3s, transform .3s;
+      z-index: 999;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+    #toast.success { border-color: var(--success); color: var(--success); }
+    #toast.error   { border-color: var(--danger);  color: var(--danger); }
+    #toast.info    { border-color: var(--info);    color: var(--info); }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,.2);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .refresh-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: .75rem;
+      cursor: pointer;
+      transition: color .2s, border-color .2s;
+    }
+    .refresh-btn:hover { color: var(--text); border-color: var(--accent); }
+
+    .empty-list { color: var(--muted); font-size: .85rem; text-align: center; padding: 40px 0; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Webhook <span>Delivery Engine</span></h1>
+  <span class="badge-live">Live</span>
+</header>
+
+<main>
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat-card pending">
+      <div class="label">Pending</div>
+      <div class="value" id="stat-pending">—</div>
+    </div>
+    <div class="stat-card delivered">
+      <div class="label">Delivered</div>
+      <div class="value" id="stat-delivered">—</div>
+    </div>
+    <div class="stat-card failed">
+      <div class="label">Failed</div>
+      <div class="value" id="stat-failed">—</div>
+    </div>
+    <div class="stat-card dead">
+      <div class="label">Dead</div>
+      <div class="value" id="stat-dead">—</div>
+    </div>
+  </div>
+
+  <div class="panels">
+    <!-- Left: Ingest + Event List -->
+    <div style="display:flex;flex-direction:column;gap:24px;">
+
+      <!-- Ingest Form -->
+      <div class="panel">
+        <div class="panel-header">Send New Event</div>
+        <div class="form-body">
+          <div>
+            <label>Event Type</label>
+            <input id="f-type" type="text" placeholder="e.g. payment.failed" value="payment.failed" />
+          </div>
+          <div>
+            <label>Webhook URL</label>
+            <input id="f-url" type="url" placeholder="https://your-server.com/hook" />
+          </div>
+          <div>
+            <label>Payload (JSON)</label>
+            <textarea id="f-payload">{"amount": 99, "currency": "USD"}</textarea>
+          </div>
+          <button class="btn btn-primary" id="send-btn" onclick="sendEvent()">Send Event</button>
+          <div id="send-error" style="color:var(--danger);font-size:.8rem;display:none;"></div>
+        </div>
+      </div>
+
+      <!-- Event List -->
+      <div class="panel">
+        <div class="panel-header">
+          All Events
+          <button class="refresh-btn" onclick="loadEvents()">↻ Refresh</button>
+        </div>
+        <div class="event-list" id="event-list">
+          <div class="empty-list">No events yet.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Event Detail -->
+    <div class="panel" style="align-self:start;">
+      <div class="panel-header" id="detail-title">
+        Event Detail
+        <button class="btn btn-sm btn-retry" id="retry-btn" style="display:none;" onclick="retryEvent()">↺ Retry</button>
+      </div>
+      <div class="detail-body" id="detail-body">
+        <div class="detail-empty">Select an event to view details.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+  const API = 'http://localhost:8000';
+  let selectedId = null;
+  let allEvents = [];
+
+  // ── Toast ──────────────────────────────────────────────
+  function toast(msg, type = 'info', duration = 3000) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `show ${type}`;
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.className = ''; }, duration);
+  }
+
+  // ── Stats ──────────────────────────────────────────────
+  function updateStats(events) {
+    const counts = { pending: 0, delivered: 0, failed: 0, dead: 0 };
+    events.forEach(e => { if (counts[e.status] !== undefined) counts[e.status]++; });
+    document.getElementById('stat-pending').textContent   = counts.pending;
+    document.getElementById('stat-delivered').textContent = counts.delivered;
+    document.getElementById('stat-failed').textContent    = counts.failed;
+    document.getElementById('stat-dead').textContent      = counts.dead;
+  }
+
+  // ── Load Events ────────────────────────────────────────
+  async function loadEvents() {
+    try {
+      const res = await fetch(`${API}/events`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      allEvents = await res.json();
+      renderList(allEvents);
+      updateStats(allEvents);
+      if (selectedId) {
+        const updated = allEvents.find(e => e.id === selectedId);
+        if (updated) renderDetail(updated);
+      }
+    } catch (e) {
+      toast('Failed to load events: ' + e.message, 'error');
+    }
+  }
+
+  // ── Render List ────────────────────────────────────────
+  function renderList(events) {
+    const el = document.getElementById('event-list');
+    if (!events.length) {
+      el.innerHTML = '<div class="empty-list">No events yet.</div>';
+      return;
+    }
+    el.innerHTML = events.map(e => `
+      <div class="event-item ${e.id === selectedId ? 'active' : ''}" onclick="selectEvent('${e.id}')">
+        <div class="event-type">
+          ${escHtml(e.type)}
+          <small>${e.id}</small>
+        </div>
+        <span class="status status-${e.status}">${e.status}</span>
+      </div>
+    `).join('');
+  }
+
+  // ── Select Event ───────────────────────────────────────
+  async function selectEvent(id) {
+    selectedId = id;
+    renderList(allEvents);
+    try {
+      const res = await fetch(`${API}/events/${id}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const event = await res.json();
+      renderDetail(event);
+    } catch (e) {
+      toast('Failed to load event: ' + e.message, 'error');
+    }
+  }
+
+  // ── Render Detail ──────────────────────────────────────
+  function renderDetail(event) {
+    document.getElementById('detail-title').childNodes[0].textContent = 'Event Detail ';
+    const retryBtn = document.getElementById('retry-btn');
+    retryBtn.style.display = event.status === 'dead' ? 'inline-block' : 'none';
+    retryBtn.dataset.id = event.id;
+
+    const attempts = (event.attempts || []).map((a, i) => `
+      <div class="attempt-row">
+        <span class="attempt-num">#${i + 1}</span>
+        <span class="attempt-time">${fmtDate(a.attempted_at)}</span>
+        <span class="attempt-http ${httpClass(a.http_status)}">${a.http_status ?? 'timeout'}</span>
+        <span class="status status-${a.outcome === 'success' ? 'delivered' : 'failed'}">${a.outcome}</span>
+      </div>
+    `).join('') || '<div style="color:var(--muted);font-size:.8rem;">No attempts yet.</div>';
+
+    document.getElementById('detail-body').innerHTML = `
+      <div class="detail-meta">
+        <div class="row"><span class="key">ID</span><span class="val">${event.id}</span></div>
+        <div class="row"><span class="key">Type</span><span class="val">${escHtml(event.type)}</span></div>
+        <div class="row"><span class="key">Status</span><span class="val"><span class="status status-${event.status}">${event.status}</span></span></div>
+        <div class="row"><span class="key">Created</span><span class="val">${fmtDate(event.created_at)}</span></div>
+        <div class="row"><span class="key">Webhook URL</span><span class="val">${escHtml(event.webhook_url)}</span></div>
+      </div>
+      <div class="payload-box">${escHtml(JSON.stringify(event.payload, null, 2))}</div>
+      <div class="attempts-title">Delivery Attempts (${event.attempts?.length ?? 0})</div>
+      ${attempts}
+    `;
+  }
+
+  // ── Send Event ─────────────────────────────────────────
+  async function sendEvent() {
+    const btn = document.getElementById('send-btn');
+    const errEl = document.getElementById('send-error');
+    errEl.style.display = 'none';
+
+    const type = document.getElementById('f-type').value.trim();
+    const url  = document.getElementById('f-url').value.trim();
+    const rawPayload = document.getElementById('f-payload').value.trim();
+
+    if (!type || !url || !rawPayload) {
+      errEl.textContent = 'All fields are required.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    let payload;
+    try { payload = JSON.parse(rawPayload); }
+    catch { errEl.textContent = 'Payload must be valid JSON.'; errEl.style.display = 'block'; return; }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Sending…';
+
+    try {
+      const res = await fetch(`${API}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, payload, webhook_url: url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(JSON.stringify(data));
+      toast('Event created & queued for delivery!', 'success');
+      await loadEvents();
+      selectEvent(data.id);
+    } catch (e) {
+      errEl.textContent = 'Error: ' + e.message;
+      errEl.style.display = 'block';
+      toast('Failed to send event.', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = 'Send Event';
+    }
+  }
+
+  // ── Retry Dead Event ───────────────────────────────────
+  async function retryEvent() {
+    const id = document.getElementById('retry-btn').dataset.id;
+    if (!id) return;
+    try {
+      const res = await fetch(`${API}/events/${id}/retry`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      toast('Event re-queued for delivery!', 'success');
+      await loadEvents();
+      selectEvent(id);
+    } catch (e) {
+      toast('Retry failed: ' + e.message, 'error');
+    }
+  }
+
+  // ── Helpers ────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleString();
+  }
+  function httpClass(code) {
+    if (!code) return 'http-null';
+    return code >= 200 && code < 300 ? 'http-ok' : 'http-err';
+  }
+
+  // ── Auto-refresh every 5s ──────────────────────────────
+  loadEvents();
+  setInterval(loadEvents, 5000);
+</script>
+</body>
+</html>
